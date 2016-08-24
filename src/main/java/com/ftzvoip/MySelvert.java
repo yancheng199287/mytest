@@ -27,7 +27,7 @@ public class MySelvert extends HttpServlet {
 	 */
 	protected void doGet(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
 		// TODO Auto-generated method stub
-		String name="这是 的一个测试项目， 看你不能顺利运行起来吧！";
+		String name="这是 的一个测试项目， 看你不能顺利运行起来吧！  hello world！ just test it！";
 		response.setCharacterEncoding("UTF-8");
 		response.getWriter().append("Served at: ").append(request.getContextPath()).append(name);
 		

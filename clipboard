@@ -1,49 +1,86 @@
 import 'dart:ffi';
 import 'dart:isolate';
-import 'package:ffi/ffi.dart';
 import 'package:win32/win32.dart';
 
-void main() async {
-  final receivePort = ReceivePort();
-  await Isolate.spawn(clipboardListener, receivePort.sendPort);
-
-  await for (final message in receivePort) {
-    if (message is String) {
-      print('Clipboard content changed: $message');
-    }
-  }
-}
-
+// 创建一个后台处理函数，用于监听剪贴板
 void clipboardListener(SendPort sendPort) {
-  final user32 = DynamicLibrary.open('user32.dll');
-  final clipboardCallback =
-      Pointer.fromFunction<HookProc>(clipboardCallbackWrapper, 0);
-  final hookId = SetWindowsHookEx(
-    WH_CLIPBOARD,
-    clipboardCallback,
-    user32,
-    0,
-  );
+  final hWnd = Allocate<Uint32>().address;
 
-  final messageLoop = GetMessageLoop();
-  messageLoop.run();
+  // 添加监听器
+  AddClipboardFormatListener(hWnd);
 
-  UnhookWindowsHookEx(hookId);
-  sendPort.send('Finished');
-}
-
-int clipboardCallbackWrapper(int code, int wParam, int lParam) {
-  if (code == HC_ACTION) {
-    if (wParam == WM_CLIPBOARDUPDATE) {
-      final clipboardData = GetClipboardData(CF_TEXT);
-      final textPointer = GlobalLock(clipboardData);
-      final text = TEXT_POINTER_TO_DART(textPointer);
-      GlobalUnlock(clipboardData);
-
-      SendPort? sendPort = IsolateNameServer.lookupPortByName('clipboard');
-      sendPort?.send(text);
+  // 设置一个消息循环来监听剪贴板改变消息
+  final msg = Allocate<MSG>();
+  while (GetMessage(msg, NULL, 0, 0) != 0) {
+    if (msg.ref.message == WM_CLIPBOARDUPDATE) {
+      sendPort.send(getClipboardDataAsString(CF_UNICODETEXT));
     }
+    TranslateMessage(msg);
+    DispatchMessage(msg);
   }
 
-  return CallNextHookEx(0, code, wParam, lParam);
+  // 清理资源
+  free(msg);
+  RemoveClipboardFormatListener(hWnd);
+  free(Pointer.fromAddress(hWnd));
+}
+
+// 读取剪贴板数据为文本字符串
+String? getClipboardDataAsString(int format) {
+  String? result;
+
+  if (OpenClipboard(NULL) != 0) {
+    final hMem = GetClipboardData(format);
+
+    if (hMem != NULL) {
+      final ptr = GlobalLock(hMem);
+      result = ptr.cast<Utf16>().toDartString();
+      GlobalUnlock(hMem);
+    }
+
+    CloseClipboard();
+  }
+
+  return result;
+}
+
+// 写入字符串到剪贴板
+bool setClipboardDataFromString(String data) {
+  final ptr = TEXT(data);
+  final success = OpenClipboard(NULL) != 0 &&
+                  EmptyClipboard() != 0 &&
+                  SetClipboardData(CF_UNICODETEXT, ptr.address) != 0 &&
+                  CloseClipboard() != 0;
+
+  ptr.free();
+  return success;
+}
+
+// 启动和停止监听剪贴板的控制函数
+class ClipboardMonitor {
+  ReceivePort? _receivePort;
+  Isolate? _isolate;
+
+  void start() {
+    _receivePort = ReceivePort();
+    _receivePort!.listen((dynamic message) {
+      // 每次剪贴板更新此回调将调用
+      if (message is String) {
+        print('Clipboard updated with text: $message');
+        // 更多处理，如更新UI
+      }
+    });
+
+    Isolate.spawn(clipboardListener, _receivePort!.sendPort);
+  }
+
+  void stop() {
+    if (_receivePort != null) {
+      _receivePort!.close();
+      _receivePort = null;
+    }
+
+    // 这个示例中没有明确地终止监听的 isolate，依赖于系统将会在主 isolate 退出时关闭。
+    // 为了正常终止，应当实现消息传递以清理资源并停止消息循环或使用kill功能强行终止。
+  }
 }

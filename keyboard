@@ -1,0 +1,41 @@
+import 'dart:ffi';
+import 'package:ffi/ffi.dart';
+import 'package:win32/win32.dart';
+
+void sendCtrlKey(int vkKey) {
+  var inputs = calloc<INPUT>(2);
+  inputs[0].type = INPUT_KEYBOARD;
+  inputs[0].ki.wVk = VK_CONTROL;
+  inputs[0].ki.dwFlags = 0;
+  inputs[0].ki.dwExtraInfo = GetMessageExtraInfo();
+
+  inputs[1].type = INPUT_KEYBOARD;
+  inputs[1].ki.wVk = vkKey;
+  inputs[1].ki.dwFlags = 0;
+  inputs[1].ki.dwExtraInfo = GetMessageExtraInfo();
+
+  // Send the key-down events
+  SendInput(2, inputs, sizeOf<INPUT>());
+
+  inputs[0].ki.dwFlags = KEYEVENTF_KEYUP;
+  inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
+
+  // Send the key-up events
+  SendInput(2, inputs, sizeOf<INPUT>());
+
+  calloc.free(inputs);
+}
+
+void simulateCtrlC() {
+  sendCtrlKey(VK_C);
+}
+
+void simulateCtrlV() {
+  sendCtrlKey(VK_V);
+}
+
+void main() {
+  simulateCtrlC();
+  // Normally, you'd wait for the clipboard operation to complete or use a delay.
+  simulateCtrlV();
+}

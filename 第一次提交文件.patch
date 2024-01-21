@@ -1,0 +1,1192 @@
+Subject: [PATCH] 第一次提交文件
+---
+Index: Cargo.toml
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/Cargo.toml b/Cargo.toml
+new file mode 100644
+--- /dev/null	(revision 2b59f02c5a7407b77e0551c5b9cab02fef91546e)
++++ b/Cargo.toml	(revision 2b59f02c5a7407b77e0551c5b9cab02fef91546e)
+@@ -0,0 +1,29 @@
++[package]
++name = "websocket_ipc"
++version = "0.1.0"
++edition = "2021"
++
++# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
++
++[dependencies]
++tokio = { version = "1.33.0", features = ["full"] }
++hyper = { version = "0.14.26", features = ["http1", "server", "client"] }
++fastwebsockets = {version="0.4.4",features=["upgrade"]}
++serde = { version = "1.0", features = ["derive"] }
++serde_json = "1.0"
++utf-8 = "0.7.6"
++bytes = "1.5.0"
++parking_lot = "0.12.1"  # 线程 锁 处理
++chrono = "0.4.31"  # 时间处理
++
++
++
++
++[lib]
++name = "websocket_ipc"
++path = "src/lib.rs"
++
++#[lib]
++#crate-type = ["lib"]
++#name = "websocket_ipc"
++#path = "src/lib.rs"
+\ No newline at end of file
+Index: examples/handler_message_decoder.rs
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/examples/handler_message_decoder.rs b/examples/handler_message_decoder.rs
+new file mode 100644
+--- /dev/null	(revision 2b59f02c5a7407b77e0551c5b9cab02fef91546e)
++++ b/examples/handler_message_decoder.rs	(revision 2b59f02c5a7407b77e0551c5b9cab02fef91546e)
+@@ -0,0 +1,112 @@
++use parking_lot::RwLock;
++use std::collections::HashMap;
++use std::sync::Arc;
++
++type MessageChunks = Vec<u8>;
++type GlobalMessageStorage = HashMap<String, HashMap<String, Arc<RwLock<MessageState>>>>;
++
++struct MessageState {
++    chunks: MessageChunks, // Chunked data for this message
++}
++
++// Define your own message decoding function based on your protocol
++fn decode_message(chunks: &[u8]) -> Result<String, std::string::FromUtf8Error> {
++    // Example decode implementation+
++    // 解码消息的逻辑
++    String::from_utf8(chunks.to_vec())
++}
++
++
++fn handle_message(storage: &Arc<RwLock<GlobalMessageStorage>>, app_id: &str, task_id: &str, data: Vec<u8>) -> Option<String> {
++    // 定义一个用于插入的新 MessageState， 不要在接收的消息中定义，这里应该是一个全局的固定常量
++    let new_task_state = || Arc::new(RwLock::new(MessageState { chunks: vec![] }));
++
++    // 下面代码中使用了 代码块 相当于定义了一块作用域，会自动释放对应的锁，比如这里的读锁
++    let task_state_arc_option = {
++        // 获取全局存储的读锁来尝试找到任务状态
++        let r_storage = storage.read();
++
++        // 如果可以获取到app_id，那么尝试继续获取task_id
++        if let Some(app_storage) = r_storage.get(app_id) {
++            // 获取应用级存储的读锁来尝试找到任务状态
++            // 在 Rust 中，当你从一个 HashMap 获取一个值时，你得到的是一个对存储在 HashMap 中值的引用。如果你想要为之后的使用保留这个值的所有权，你需要获取该值的一个副本，而不是引用。这就是 cloned() 方法的用途：它会克隆 Option 中的值（如果存在的话）。
++            // 这里的clone，实际是对map中引用值的克隆，获取副本拿到所有权，是对 &Arc<RwLock<MessageState>>的克隆，获取Arc<RwLock<MessageState>>所有权
++            app_storage.get(task_id).cloned()
++        } else {
++            None
++        }
++    };
++
++    let task_state_arc = if let Some(task_state) = task_state_arc_option {
++        task_state
++    } else {
++        // 获取全局存储的写锁来更新或插入任务状态
++        let mut w_storage = storage.write();
++        // 获取全局w_storage中应用id对应的hashmap，如果不存在，会执行or_default，创建一个空的map，存在不会创建，直接返回存在的map
++        let app_storage = w_storage.entry(app_id.to_string()).or_default();
++
++        // 尝试插入一个新的任务状态
++        let task_state = app_storage.entry(task_id.to_string())
++            .or_insert_with(new_task_state)
++            .clone();
++        task_state
++    };
++
++    let mut task_state = task_state_arc.write();
++    task_state.chunks.extend(data);
++
++    // 检查消息是否完整的逻辑
++    /* if is_message_complete(&task_state.chunks) {
++         let msg_data = std::mem::take(&mut task_state.chunks);
++         return decode_message(&msg_data).ok();
++     }*/
++
++    None
++}
++
++fn is_message_complete(chunks: &[u8]) -> bool {
++    // 实现一些逻辑来检查消息是否完整
++    // 例如：检查最后一个字符是否是某个特定的分隔符，或者数据已经到达了特定长度
++    true // 这里仅为示例
++}
++
++
++pub struct MessageHandler {
++    storage: Arc<RwLock<GlobalMessageStorage>>,
++}
++
++impl MessageHandler {
++    pub fn new() -> Self {
++        Self {
++            storage: Arc::new(RwLock::new(HashMap::new())),
++        }
++    }
++
++    pub fn handle_incoming_data(&self, app_id: &str, task_id: &str, data: Vec<u8>) -> Option<String> {
++        handle_message(&self.storage, app_id, task_id, data)
++    }
++}
++
++fn print_state(storage: &Arc<RwLock<GlobalMessageStorage>>) {
++    for (app_id, app_storage) in storage.read().iter() {
++        for (task_id, task_state) in app_storage.iter() {
++            let msg = task_state.read();
++            let result = String::from_utf8(msg.chunks.to_vec()).unwrap();
++            println!("app_id:{}   task_id: {} payload:{}", app_id, task_id,result);
++        }
++    }
++}
++
++fn main() {
++    let handler = MessageHandler::new();
++
++    let app_id = "app1".into();
++    let task_id = "task1".into();
++    handler.handle_incoming_data(app_id, task_id, b"Hello, ".to_vec());
++
++    handler.handle_incoming_data(app_id, task_id, b"World!".to_vec());
++
++    handler.handle_incoming_data(app_id, task_id, b", we are family!".to_vec());
++
++    print_state(&handler.storage);
++}
+\ No newline at end of file
+Index: examples/receive_stream1.rs
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/examples/receive_stream1.rs b/examples/receive_stream1.rs
+new file mode 100644
+--- /dev/null	(revision 2b59f02c5a7407b77e0551c5b9cab02fef91546e)
++++ b/examples/receive_stream1.rs	(revision 2b59f02c5a7407b77e0551c5b9cab02fef91546e)
+@@ -0,0 +1,73 @@
++use bytes::{Buf, BytesMut};
++use serde::{Deserialize, Serialize};
++use std::str;
++use websocket_ipc::model::request_payload::{Header, Metadata};
++
++
++// examples/example.rs
++
++// 在 2018 版本之前，你需要使用 extern crate 来导入库
++
++extern crate websocket_ipc;
++
++
++fn main() {
++    // Example binary data with header, metadata, and file chunk
++    let header = Header {
++        app_id: "".to_string(),
++        msg_id: "".to_string(),
++        session_id: "".to_string(),
++        version: 1,
++    };
++    let metadata = Metadata {
++        name: "test_file.txt".to_string(),
++        stream_type: "".to_string(),
++        chunk_index:0,
++        chunk_total: 0,
++        stream_length: 0,
++    };
++
++    // 将header和metadata转换为JSON字符串
++    let header_str = serde_json::to_string(&header).unwrap();
++    let metadata_str = serde_json::to_string(&metadata).unwrap();
++
++
++    let file_chunk = b"This is a tests file content.";
++
++    // 合并所有部分，并在每部分之间添加'|'作为分隔符
++    let mut binary_data = Vec::new();
++    binary_data.extend_from_slice(header_str.as_bytes());
++    binary_data.push(b'|');
++    binary_data.extend_from_slice(metadata_str.as_bytes());
++    binary_data.push(b'|');
++    binary_data.extend_from_slice(file_chunk);
++
++
++    // Split the binary data based on '|'
++    let parts: Vec<&[u8]> = binary_data.split(|&b| b == b'|').collect();
++
++    // Convert header bytes to string
++    let header_bytes = parts[0];
++    let header_str = str::from_utf8(header_bytes).expect("Failed to convert header bytes to string");
++    let header: Header = serde_json::from_str(header_str).expect("Failed to deserialize header");
++
++    // Convert metadata bytes to string
++    let metadata_bytes = parts[1];
++    let metadata_str =
++        str::from_utf8(metadata_bytes).expect("Failed to convert metadata bytes to string");
++    let metadata: Metadata =
++        serde_json::from_str(metadata_str).expect("Failed to deserialize metadata");
++
++    // Collect file chunk bytes into BytesMut
++    let mut file_chunk = BytesMut::new();
++    for i in 2..parts.len() {
++        file_chunk.extend_from_slice(parts[i]);
++    }
++
++    // Example: Print the deserialized header, metadata, and file chunk
++    println!("Header: {:?}", header);
++    println!("Metadata: {:?}", metadata);
++
++    let file_chunk_str = str::from_utf8(&file_chunk).expect("Failed to convert file chunk bytes to string");
++    println!("File Chunk: {:?}", file_chunk_str);
++}
+\ No newline at end of file
+Index: examples/send_stream.rs
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/examples/send_stream.rs b/examples/send_stream.rs
+new file mode 100644
+--- /dev/null	(revision 2b59f02c5a7407b77e0551c5b9cab02fef91546e)
++++ b/examples/send_stream.rs	(revision 2b59f02c5a7407b77e0551c5b9cab02fef91546e)
+@@ -0,0 +1,71 @@
++use bytes::{Buf, BytesMut};
++use serde::{Deserialize, Serialize};
++use std::str;
++
++#[derive(Debug, Serialize, Deserialize)]
++struct Header {
++    version: u8,
++    message_id: u64,
++}
++
++#[derive(Debug, Serialize, Deserialize)]
++struct Metadata {
++    file_name: String,
++    chunk_count: u32,
++}
++
++fn main() {
++    // Example binary data with header, metadata, and file chunk
++    let header = Header {
++        version: 1,
++        message_id: 1234567890,
++    };
++    let metadata = Metadata {
++        file_name: "test_file.txt".to_string(),
++        chunk_count: 3,
++    };
++
++    // 将header和metadata转换为JSON字符串
++    let header_str = serde_json::to_string(&header).unwrap();
++    let metadata_str = serde_json::to_string(&metadata).unwrap();
++
++
++    let file_chunk = b"This is a tests file content.";
++
++    // 合并所有部分，并在每部分之间添加'|'作为分隔符
++    let mut binary_data = Vec::new();
++    binary_data.extend_from_slice(header_str.as_bytes());
++    binary_data.push(b'|');
++    binary_data.extend_from_slice(metadata_str.as_bytes());
++    binary_data.push(b'|');
++    binary_data.extend_from_slice(file_chunk);
++
++
++    // Split the binary data based on '|'
++    let parts: Vec<&[u8]> = binary_data.split(|&b| b == b'|').collect();
++
++    // Convert header bytes to string
++    let header_bytes = parts[0];
++    let header_str = str::from_utf8(header_bytes).expect("Failed to convert header bytes to string");
++    let header: Header = serde_json::from_str(header_str).expect("Failed to deserialize header");
++
++    // Convert metadata bytes to string
++    let metadata_bytes = parts[1];
++    let metadata_str =
++        str::from_utf8(metadata_bytes).expect("Failed to convert metadata bytes to string");
++    let metadata: Metadata =
++        serde_json::from_str(metadata_str).expect("Failed to deserialize metadata");
++
++    // Collect file chunk bytes into BytesMut
++    let mut file_chunk = BytesMut::new();
++    for i in 2..parts.len() {
++        file_chunk.extend_from_slice(parts[i]);
++    }
++
++    // Example: Print the deserialized header, metadata, and file chunk
++    println!("Header: {:?}", header);
++    println!("Metadata: {:?}", metadata);
++
++    let file_chunk_str = str::from_utf8(&file_chunk).expect("Failed to convert file chunk bytes to string");
++    println!("File Chunk: {:?}", file_chunk_str);
++}
+\ No newline at end of file
+Index: src/lib.rs
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/src/lib.rs b/src/lib.rs
+new file mode 100644
+--- /dev/null	(revision 2b59f02c5a7407b77e0551c5b9cab02fef91546e)
++++ b/src/lib.rs	(revision 2b59f02c5a7407b77e0551c5b9cab02fef91546e)
+@@ -0,0 +1,3 @@
++pub mod model;
++
++
+Index: src/main.rs
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/src/main.rs b/src/main.rs
+new file mode 100644
+--- /dev/null	(revision 2b59f02c5a7407b77e0551c5b9cab02fef91546e)
++++ b/src/main.rs	(revision 2b59f02c5a7407b77e0551c5b9cab02fef91546e)
+@@ -0,0 +1,99 @@
++mod payload_decoder;
++mod model;
++
++mod lib;
++
++use fastwebsockets::{Frame, OpCode, Payload, upgrade, WebSocketError};
++use hyper::{Body, Request, Response};
++use hyper::server::conn::Http;
++use hyper::service::service_fn;
++use tokio::net::TcpListener;
++
++
++async fn handle_client(fut: upgrade::UpgradeFut) -> Result<(), WebSocketError> {
++    let websocket = fut.await?;
++    let mut ws = fastwebsockets::FragmentCollector::new(websocket);
++    loop {
++        let frame = ws.read_frame().await?;
++       let sss =  &frame.payload.to_vec();
++        let s = String::from_utf8(sss.to_vec()).unwrap();
++        println!("服务端接收到消息内容1111: {}", s);
++        match frame.opcode {
++            OpCode::Close => break,
++            OpCode::Text | OpCode::Binary => {
++               // 使用utf8库的decode方法对frame的payload进行解码
++                let result = utf8::decode(&frame.payload);
++                match result {
++                    Ok(msg) => {
++                        println!("服务端接收到消息内容: {}", msg);
++                    }
++                    Err(error) => {
++                        println!("解码消息错误: {:?}", error);
++                    }
++                }
++
++
++                ws.write_frame(frame).await?;
++                let content = "hello, I am from websocket";
++                let json = serde_json::to_string(content).unwrap();
++                let frame = Frame::text(Payload::from(json.as_bytes()));
++                ws.write_frame(frame).await?;
++                // 跳出循环则是关闭此连接通道
++                //  break;
++            }
++            _ => {}
++        }
++    }
++
++    Ok(())
++}
++
++async fn server_upgrade(mut req: Request<Body>) -> Result<Response<Body>, WebSocketError> {
++    // 对request对象进行升级websocket
++    let (response, fut) = upgrade::upgrade(&mut req)?;
++
++    // 这个地方继续开启异步任务去处理流的相关操作
++    tokio::task::spawn(async move {
++        // unconstrained代表一个不受tokio运行时限制的异步任务，tokio默认有最大线程数和最大等待时间，而这个方法不受这个限制
++        // 请确保处理不太耗时和资源的操作
++        if let Err(e) = tokio::task::unconstrained(handle_client(fut)).await {
++            eprintln!("Error in websocket connection: {:?}", e);
++        }
++    });
++    // let response = Response::new("hello world");
++    //  let response = Response::builder().status(200).body(Body::from("hello world")).unwrap();
++    // 升级完成立即返回，注意这里返回之后，上面的异步任务还在继续执行
++    Ok(response)
++}
++
++fn main() -> Result<(), WebSocketError> {
++    // 启动一个运行时，用来执行异步事件任务
++    let rt = tokio::runtime::Builder::new_current_thread()
++        .enable_io()
++        .build()
++        .unwrap();
++
++    // 阻塞一个异步任务，阻塞使用的是loop来完成
++    rt.block_on(async move {
++        // 启动服务端监听端口
++        let listener = TcpListener::bind("127.0.0.1:8080").await?;
++        println!("Server started, listening on {}", "127.0.0.1:8080");
++
++        // 循环获取客户端连接事件，这个循环是阻塞的
++        loop {
++            // 获取一个TCP客户端连接
++            let (stream, _) = listener.accept().await?;
++            println!("Client connected");
++
++            // 处理客户端连接请求
++            tokio::spawn(async move {
++                let conn_fut = Http::new()
++                    .serve_connection(stream, service_fn(server_upgrade))
++                    .with_upgrades();
++                if let Err(e) = conn_fut.await {
++                    println!("An error occurred: {:?}", e);
++                }
++            });
++        }
++    })
++}
+Index: src/model/handler_client_message.rs
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/src/model/handler_client_message.rs b/src/model/handler_client_message.rs
+new file mode 100644
+--- /dev/null	(revision 2b59f02c5a7407b77e0551c5b9cab02fef91546e)
++++ b/src/model/handler_client_message.rs	(revision 2b59f02c5a7407b77e0551c5b9cab02fef91546e)
+@@ -0,0 +1,79 @@
++use parking_lot::RwLock;
++use std::collections::HashMap;
++use std::sync::Arc;
++
++// 假设您的消息片段能转换为这个结构体
++#[derive(Debug, Clone)]
++struct MessageChunk {
++    app_id: u64,
++    task_id: u64,
++    sequence: u64, // 消息序列号
++    data: String,  // 片段的数据
++    is_last: bool, // 是否是最后一块数据
++}
++
++// 用来存储和合并消息的结构体
++#[derive(Default)]
++struct MessageAccumulator {
++    messages: HashMap<u64, HashMap<u64, String>>, // 每个appid包含一个任务ID到消息的映射
++}
++
++// 此结构是线程安全的消息解码器，包含应用程序id和任务id
++struct MessageDecoder {
++    accumulator: RwLock<MessageAccumulator>,
++}
++
++impl MessageAccumulator {
++    fn add_chunk(&mut self, chunk: MessageChunk) -> Option<String> {
++        let task_map = self.messages.entry(chunk.app_id).or_insert_with(HashMap::new);
++        let message = task_map.entry(chunk.task_id).or_insert_with(String::new);
++
++        message.push_str(&chunk.data);
++
++        if chunk.is_last {
++            task_map.remove(&chunk.task_id)
++        } else {
++            None
++        }
++    }
++}
++
++impl MessageDecoder {
++    pub fn new() -> Self {
++        MessageDecoder {
++            accumulator: RwLock::new(MessageAccumulator::default()),
++        }
++    }
++
++    pub fn process_chunk(&self, chunk: MessageChunk) {
++        // 获取写锁
++        let mut accumulator = self.accumulator.write();
++
++        // 添加消息片段到合适的位置，并检查是否构成了完整的消息
++        if let Some(complete_message) = accumulator.add_chunk(chunk) {
++            // 在这里可以进行消息的进一步处理，比如调用更多任务或者查询数据库
++            self.handle_message(complete_message);
++        }
++        // 锁在这里自动释放
++    }
++
++    fn handle_message(&self, message: String) {
++        println!("处理完整的消息: {}", message);
++        // TODO: 在这里实现消息处理逻辑，比如执行任务或查询数据库
++    }
++}
++
++// 在您的应用中使用MessageDecoder
++fn main() {
++    let decoder = MessageDecoder::new();
++    let chunks = vec![
++        MessageChunk { app_id: 1, task_id: 1, sequence: 1, data: "Hello ".into(), is_last: false },
++        MessageChunk { app_id: 1, task_id: 1, sequence: 2, data: "World".into(), is_last: false },
++        MessageChunk { app_id: 1, task_id: 1, sequence: 3, data: "!".into(), is_last: true },
++        // ... 其他消息片段
++    ];
++
++    for chunk in chunks {
++        decoder.process_chunk(chunk);
++    }
++}
+\ No newline at end of file
+Index: src/model/mod.rs
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/src/model/mod.rs b/src/model/mod.rs
+new file mode 100644
+--- /dev/null	(revision 2b59f02c5a7407b77e0551c5b9cab02fef91546e)
++++ b/src/model/mod.rs	(revision 2b59f02c5a7407b77e0551c5b9cab02fef91546e)
+@@ -0,0 +1,5 @@
++pub mod task_type;
++pub mod request_payload;
++mod handler_client_message;
++
++
+Index: src/model/request_payload.rs
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/src/model/request_payload.rs b/src/model/request_payload.rs
+new file mode 100644
+--- /dev/null	(revision 2b59f02c5a7407b77e0551c5b9cab02fef91546e)
++++ b/src/model/request_payload.rs	(revision 2b59f02c5a7407b77e0551c5b9cab02fef91546e)
+@@ -0,0 +1,88 @@
++use serde::{Deserialize, Serialize};
++use std::str;
++use bytes::BytesMut;
++use crate::model::task_type::TaskType;
++
++/// 本类型实现客户端分块传参数据流到服务端
++/// 第一个消息 header+metaData+businessData
++/// 后续消息 header+metaData+stream（分块）
++#[derive(Debug, Serialize, Deserialize)]
++pub struct Header {
++    pub app_id: String,
++    pub msg_id: String,
++    pub session_id: String,
++    pub version: u8,  // 在实际后台维护一个  数字和对应的版本名称，方便判断版本的大小处理一些兼容性问题
++}
++
++#[derive(Debug, Serialize, Deserialize)]
++pub struct Metadata {
++    pub name: String,
++    pub stream_type: String,
++    pub stream_length: u32,
++    pub chunk_total: u32,
++    pub chunk_index: u32,
++}
++
++#[derive(Debug, Serialize, Deserialize)]
++pub struct BusinessData {
++    /// 任务类型  函数调用function（最好用前缀区分，比如操作redis，redis.getValue(),参数 name）  脚本执行script， 消息订阅 Subscription
++    task_type: TaskType,
++    /// 每种任务类型不同，在这里可以定义响应的参数，这个是一个json字符串，可以根据任务类型来确定不同的结构体
++    task_params: String,
++}
++
++#[derive(Debug, Serialize, Deserialize)]
++pub struct RequestData {
++    header: Header,
++    metadata: Metadata,
++    business_data: Option<BusinessData>,
++    // 业务数据,第一次有，第二次没有，使用Option类型，防止json序列化出错，没有这个key就是None值
++    #[serde(skip)]
++    stream: BytesMut,
++}
++
++/// 解析第一个发来的消息体，包含业务数据，不包含流数据
++pub fn parser_first_request_payload(json_data: &str) -> Result<RequestData, Box<dyn std::error::Error>> {
++    let parts: RequestData = serde_json::from_str(json_data).unwrap();
++    Ok(parts)
++}
++
++/// 将header部分自动解析成字符串，然后将字符串序列化为对应的struc类型
++/// static 告诉编译器这个类型的反序列化不依赖于任何特定的作用域或生命周期,在反序列化时更加灵活，不需要关注具体的生命周期限制
++/// 用静态生命周期并不意味着该类型在内存中永远存在，而是表示它的生命周期与整个程序的生命周期相同。如果该类型被释放或销毁，它的生命周期也会结束。
++fn deserialize_from_json<T: Deserialize<'static>>(bytes: &[u8]) -> Result<T, serde_json::Error> {
++    let json_str = str::from_utf8(bytes).expect("Failed to convert struct bytes to string");
++    serde_json::from_str(json_str).expect("Failed to deserialize header")
++}
++
++/// 解析后续的流数据
++pub fn parser_request_payload<'a>(exist_request_data: &'a mut RequestData, binary_data: &'a Vec<u8>) -> Result<&'a mut RequestData, Box<dyn std::error::Error>> {
++    // 按照分隔符 |  收集所有片段部分内容， 第一个是json字符串， 第二个是流数据
++    let parts: Vec<&[u8]> = binary_data.split(|&b| b == b'|').collect();
++    let part_request_data: RequestData = deserialize_from_json(parts[0]).unwrap();
++    println!("part_request_data: {:?}", part_request_data);
++    /// 加入一些debug信息
++    println!("本次分块传输的index:{}", part_request_data.metadata.chunk_index);
++    /// 分块传输完毕
++    if part_request_data.metadata.chunk_total == part_request_data.metadata.chunk_index {
++        println!("本次分块传输完毕，本次分块传输的index:{}", part_request_data.metadata.chunk_index);
++    }
++    exist_request_data.header = part_request_data.header;
++    exist_request_data.metadata = part_request_data.metadata;
++    if let Some(business_data) = part_request_data.business_data {
++        exist_request_data.business_data = Some(business_data);
++    }
++    /// 追加字节流
++    exist_request_data.stream.extend_from_slice(parts[1]);
++    // 返回最新的请求数据，合并了分块数据， 解析完成之后，判断当前分块是否结束 index==total  删除map的key
++    return Ok(exist_request_data);
++}
++
++
++/// 后续的消息体，需要对流数据进行聚合，直到流完毕
++pub fn combine_stream<'a>(request_data: &'a mut RequestData, binary_data: &'a Vec<u8>) -> Result<&'a mut RequestData, Box<dyn std::error::Error>> {
++    let mut stream = request_data.stream.clone();
++    stream.extend_from_slice(binary_data);
++    request_data.stream = stream;
++    return Ok(request_data);
++}
+\ No newline at end of file
+Index: src/model/task_type.rs
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/src/model/task_type.rs b/src/model/task_type.rs
+new file mode 100644
+--- /dev/null	(revision 2b59f02c5a7407b77e0551c5b9cab02fef91546e)
++++ b/src/model/task_type.rs	(revision 2b59f02c5a7407b77e0551c5b9cab02fef91546e)
+@@ -0,0 +1,67 @@
++use std::str::FromStr;
++use serde::{Deserialize, Serialize};
++use crate::model::task_type::TaskType::Subscription;
++
++#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
++pub struct FunctionPayload {
++    // 定义函数任务的结构体字段
++}
++
++#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
++pub struct ScriptPayload {
++    // 定义脚本任务的结构体字段
++}
++
++#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
++pub struct SubscriptionPayload {
++    // 定义订阅任务的结构体字段
++}
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
++pub enum TaskType {
++    Function,
++    Script,
++    Subscription,
++}
++
++impl TaskType {
++/*    pub fn from_json(&self, json_str: &str) -> Result<Box<dyn TaskPayload>, Box<dyn std::error::Error>> {
++        let payload = match self {
++            Self::Function => FunctionPayload::from_str(json_str)?,
++            Self::Script => ScriptPayload::from_str(json_str)?,
++            Self::Subscription => SubscriptionPayload::from_str(json_str)?,
++        };
++        Ok(Box::new(payload) as Box<dyn TaskPayload>)
++    }*/
++}
++
++// 抽象出一个 Trait 用于表示所有任务类型的 Payload
++trait TaskPayload {}
++
++impl TaskPayload for FunctionPayload {}
++
++impl TaskPayload for ScriptPayload {}
++
++impl TaskPayload for SubscriptionPayload {}
++
++// 为了简化，这里使用了 `from_str()` 方法，实际上应使用 `serde_json::from_str()`
++impl FromStr for FunctionPayload {
++    type Err = serde_json::Error;
++    fn from_str(s: &str) -> Result<Self, Self::Err> {
++        serde_json::from_str(s)
++    }
++}
++
++impl FromStr for ScriptPayload {
++    type Err = serde_json::Error;
++    fn from_str(s: &str) -> Result<Self, Self::Err> {
++        serde_json::from_str(s)
++    }
++}
++
++impl FromStr for SubscriptionPayload {
++    type Err = serde_json::Error;
++    fn from_str(s: &str) -> Result<Self, Self::Err> {
++        serde_json::from_str(s)
++    }
++}
+Index: src/payload_decoder.rs
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/src/payload_decoder.rs b/src/payload_decoder.rs
+new file mode 100644
+--- /dev/null	(revision 2b59f02c5a7407b77e0551c5b9cab02fef91546e)
++++ b/src/payload_decoder.rs	(revision 2b59f02c5a7407b77e0551c5b9cab02fef91546e)
+@@ -0,0 +1,66 @@
++use serde::{Deserialize, Serialize};
++use serde_json::Result;
++
++
++
++#[derive(Serialize, Deserialize)]
++enum MsgType {
++    // 文本消息，主要是json数据信息
++    Text,
++    // 订阅消息类型，一般是需要持续的由服务端向客户端发送消息
++    Subscription,
++    // 脚本和函数调用，一般是一次性调用
++    Script,
++    // 文件流传输，传输文件使用
++    Stream,
++}
++
++/// websocket中每个数据包的发送是固定
++#[derive(Serialize, Deserialize)]
++struct WSPayload {
++    // 协议版本，用于后续版本的升级做兼容性判断，必须每次记录每次协议的升级内容，以便做兼容性处理
++    msg_version: String,
++    // 应用id名称
++    app_id: String,
++    // 消息类型，不同消息对应不同的处理方式
++    msg_type: MsgType,
++    // 消息id，通过 app_id+uuid+时间戳 去生成，用于每个消息的标识， 服务端识别同一种消息，客户端可以根据消息id正确处理结果回调给客户端前端函数
++    msg_id: String,
++    // 如果字节流的话，body就是base64, 需要进行分块传输，fastWebsocket设置最大的消息是64mb，大文件需要分块传输，分块传输从0开始，-1结束
++    chunk: u8,
++    // 如果字节流的话，body就是base64,否则就是普通json字符串
++    body: String,
++}
++
++impl WSPayload {
++    fn new() -> WSPayload {
++        return WSPayload {
++            app_id: "".to_string(),
++            msg_type: MsgType::Text,
++            msg_id: "".to_string(),
++            msg_version: "".to_string(),
++            chunk: 0,
++            body: "".to_string(),
++        };
++    }
++}
++
++
++#[derive(Serialize, Deserialize)]
++struct WSPayloadResponse {
++    // 状态码 200 成功
++    code: u8,
++    // 错误消息，成功为空
++    msg: String,
++    // 响应体body
++    data: WSPayload,
++    // 开启debug模式，响应的时候把请求体也带上，这里序列号json字符串
++}
++
++#[derive(Serialize, Deserialize)]
++struct WSPayloadResponseBody {
++    // 开启debug模式，响应的时候把请求体也带上，这里序列号json字符串
++    request_pay_load: String,
++    // 响应结果
++    body: String,
++}
+\ No newline at end of file
+Index: web/index.html
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/web/index.html b/web/index.html
+new file mode 100644
+--- /dev/null	(revision 2b59f02c5a7407b77e0551c5b9cab02fef91546e)
++++ b/web/index.html	(revision 2b59f02c5a7407b77e0551c5b9cab02fef91546e)
+@@ -0,0 +1,41 @@
++<!DOCTYPE html>
++<html lang="en">
++<head>
++    <meta charset="UTF-8">
++    <title>Title</title>
++
++
++</head>
++
++<body>
++<div id="content1">测试内容1</div>
++<div id="content2">测试内容2</div>
++
++
++<script src="websocket-sdk.js"></script>
++
++<script>
++
++    let startWebSocket = function () {
++        // 使用示例
++        const sdk = new WebSocketSDK('ws://localhost:8080',function (isOk){
++            console.log("连接状态：", isOk);
++
++            sdk.sendShortRequest(buildTextWSPayload("这是一个脚本调用")).then((data)=>{
++                document.getElementById("content2").innerHTML="调用成功";
++
++                document.getElementById("content1").innerHTML=data;
++            })
++        });
++
++    }
++
++    window.onload = function () {
++        console.log("hello,onload");
++        startWebSocket();
++    }
++</script>
++
++
++</body>
++</html>
+\ No newline at end of file
+Index: web/payload.js
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/web/payload.js b/web/payload.js
+new file mode 100644
+--- /dev/null	(revision 2b59f02c5a7407b77e0551c5b9cab02fef91546e)
++++ b/web/payload.js	(revision 2b59f02c5a7407b77e0551c5b9cab02fef91546e)
+@@ -0,0 +1,211 @@
++const PROTOCOL_VERSION = "v1.0.0"
++
++const DELIMITER = '|'; // 分隔符
++
++const DELIMITER_BLOB = new Blob([DELIMITER]);
++
++
++const CHUNK_SIZE = 5; // 512KB
++
++///const CHUNK_SIZE = 512 * 1024; // 512KB
++
++
++class Header {
++    constructor(app_id, session_id) {
++        /// 应用id，从应用的配置文件读取，变为全局常量
++        this.app_id = app_id;
++        /// 会话id，服务端返回生成的会话id，这个保存到当前客户端的会话配置参数里
++        this.session_id = session_id;
++        // 每次请求和响应的唯一标识
++        this.msg_id = app_id + "_" + this.getUuid();
++        /// 协议版本，随时升级，需要记录每次变化，每次升级做兼容性处理
++        this.version = PROTOCOL_VERSION;
++        /// 请求的时间
++        this.datetime = new Date().toString();
++    }
++
++    // 生成唯一性id
++    getUuid() {
++        return Number(Math.random().toString().slice(2, 10) + Date.now()).toString(36)
++    }
++}
++
++class MetaData {
++    constructor(name, type, length, chunkTotal, chunkIndex) {
++        // "流的名称"  可以是文件名称，图片名称，如果是脚本，文本 取个默认的名称接口
++        this.name = name;
++        //  "word/excel/img/text" 流的具体类型
++        this.type = type;
++        // 字节数组长度， 单纯的  流的数据
++        this.length = length;
++        // 总共的分块数量  小于或者等于0 代表不需要分块， 用分块总量除以总长度可以得到每块的大小
++        this.chunkTotal = chunkTotal;
++        // 分块的索引     1  代表第一块 ， 如果当前分块索引等于chunkTotal则分块传输完毕
++        this.chunkIndex = chunkIndex;
++    }
++
++}
++
++/// 任务类型，执行函数，执行脚本，执行消息订阅
++const TASK_TYPE = {
++    Function: "Function",
++    Script: "Script",
++    Subscription: "Subscription",
++}
++
++class BusinessData {
++
++    constructor(task_type, task_params) {
++        // 任务执行类型
++        this.task_type = task_type;
++        // 任务执行的json参数，每个任务不一样，具体自己后面再定义
++        this.task_params = task_params;
++    }
++
++}
++
++
++function sendPayload(ws, header, metaData, businessData, dataBlob) {
++    if (!dataBlob) {
++        metaData.length = 0;
++    } else {
++        metaData.length = dataBlob.size;
++    }
++    let stream = spiltStream(dataBlob);
++    metaData.chunkTotal = stream.length;
++    metaData.chunkIndex = 0;
++    let payload = {
++        header: header,
++        metaData: metaData,
++        businessData: businessData
++    };
++    let payloadStr = JSON.stringify(payload);
++
++    // 发送第一个事件
++    ws.send(payloadStr);
++
++    if (stream.length <= 0) {
++        return;
++    }
++    // 循环发送后续的分块数据流消息
++    buildChunkPartPayload(header, metaData, stream).forEach((item) => {
++        ws.send(item);
++    });
++}
++
++/*第一个消息,直接使用文本消息，大多数情况够用
++header+metaData+businessData*/
++
++function buildFirstPayload() {
++    let header = new Header("com.miniapp", "1as46a54sda6daasdasd");
++    let metaData = new MetaData("test", "word", 1000, 10, 1);
++    let businessData = new BusinessData(TASK_TYPE.Function, "{ \"name\":\"test\" }");
++
++    let payload = {
++        header: header,
++        metaData: metaData,
++        businessData: businessData
++    };
++    // let payloadStr = JSON.stringify(payload);
++    //return new Blob([payloadStr], {type: "text/plain;charset=utf-8"});
++    return JSON.stringify(payload);
++}
++
++
++/*
++第二个消息 分块流数据
++header+metaData+stream（分块）
++*/
++function buildChunkPartPayload(header, metaData, stream) {
++    metaData.chunkTotal = stream.length;
++    const chunks = [];
++    for (let i = 0; i < stream.length; i++) {
++        metaData.chunkIndex = i + 1;
++        metaData.length = stream[i].size;
++        let payload = {
++            header: header,
++            metaData: metaData
++        };
++        let chunkPartBlob = new Blob([JSON.stringify(payload), DELIMITER_BLOB, stream[i]])
++        chunks.push(chunkPartBlob);
++    }
++    return chunks;
++}
++
++// 按 CHUNK_SIZE分块大小将 data blob进行分割，返回一个分块数组，数组的容量就是分块的总数量
++function spiltStream(data) {
++    if (!data) {
++        return [];
++    }
++    const dataBlob = (data instanceof Blob) ? data : new Blob([data]);
++    if (dataBlob.size > CHUNK_SIZE) {
++        const chunkSize = CHUNK_SIZE;
++        const chunkCount = Math.ceil(dataBlob.size / chunkSize);
++        const chunks = [];
++        for (let i = 0; i < chunkCount; i++) {
++            const chunk = dataBlob.slice(i * chunkSize, (i + 1) * chunkSize);
++            chunks.push(chunk);
++        }
++        return chunks;
++    } else {
++        return [dataBlob];
++    }
++}
++
++
++class WS {
++
++    arrayBufferToString(buffer) {
++        const decoder = new TextDecoder('utf-8');
++        return decoder.decode(buffer);
++    }
++
++    send(data) {
++        if (data instanceof Blob) {
++            data.arrayBuffer().then((arrayBuffer) => {
++                let str = this.arrayBufferToString(arrayBuffer);
++                console.log("\n")
++                console.log("模拟发送消息 Blob Blob as String", data.size);
++                console.log(str);
++                console.log("\n")
++            });
++        } else {
++            console.log("模拟发送消息", data.length);
++            console.log(data);
++        }
++    }
++}
++
++
++function buildFirstPayloadTest() {
++    // 创建一个10MB的Blob
++    const blobSizeInMB = 10;
++    // const blobSizeInBytes = blobSizeInMB * 1024 * 1024; // 10 * 1024 * 1024
++    const blobSizeInBytes = blobSizeInMB * 5 + 27; // 10 * 1024 * 1024
++    const randomData = generateRandomData(blobSizeInBytes);
++    const testBlob = new Blob([randomData], {type: 'application/octet-stream'});
++    const length = testBlob.size;
++    console.log("testBlob.size:", length); // 应该接近10MB
++
++
++    let header = new Header("com.miniapp", "1as46a54sda6daasdasd");
++    let metaData = new MetaData("test", "word", 0, 0, 0);
++    let businessData = new BusinessData(TASK_TYPE.Function, "{ \"name\":\"test\" }");
++
++
++    sendPayload(new WS(), header, metaData, businessData, testBlob);
++}
++
++
++function generateRandomData(sizeInBytes) {
++    let data = [];
++    const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
++    const charactersLength = characters.length;
++    for (let i = 0; i < sizeInBytes; i++) {
++        data.push(characters.charAt(Math.floor(Math.random() * charactersLength)));
++    }
++    return new TextEncoder().encode(data.join(''));
++}
++
++
++buildFirstPayloadTest();
+\ No newline at end of file
+Index: web/websocket-sdk.js
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/web/websocket-sdk.js b/web/websocket-sdk.js
+new file mode 100644
+--- /dev/null	(revision 2b59f02c5a7407b77e0551c5b9cab02fef91546e)
++++ b/web/websocket-sdk.js	(revision 2b59f02c5a7407b77e0551c5b9cab02fef91546e)
+@@ -0,0 +1,96 @@
++const APP_ID = 'com.mini';
++
++const MSG_TYPE = {
++    Text: 'Text',
++    Subscription: 'Subscription',
++    Script: 'Script',
++    Stream: 'Stream',
++};
++
++class WSPayload {
++
++    constructor(app_id, msg_type, chunk, body) {
++        this.app_id = app_id;
++        this.msg_type = msg_type;
++        this.chunk = chunk;
++        this.body = body;
++        this.msg_id = this.app_id + "_" + this.getUuid();
++    }
++
++    generateUUID() {
++        this.msg_id = this.app_id + "_" + this.getUuid();
++    }
++
++    getUuid() {
++        return Number(Math.random().toString().slice(2, 10) + Date.now()).toString(36)
++    }
++}
++
++function buildTextWSPayload(body) {
++    return new WSPayload(APP_ID, MSG_TYPE.Text, -1, body);
++}
++
++
++// 发送分块数据
++function sendChunks2(metadata, data) {
++    const CHUNK_SIZE = 512 * 1024; // 512KB
++    const delimiter = '|'; // 分隔符
++    const metadataJson = JSON.stringify(metadata);
++    const delimiterBlob = new Blob([delimiter]);
++    const dataBlob = (data instanceof Blob) ? data : new Blob([data]);
++
++
++
++    dataBlob.arrayBuffer().then((arrayBuffer) => {
++        for (let start = 0; start < arrayBuffer.byteLength; start += CHUNK_SIZE) {
++            const fullBlob = new Blob([metadataJson, delimiterBlob, dataBlob]);
++            const chunk = arrayBuffer.slice(start, Math.min(start + CHUNK_SIZE, arrayBuffer.byteLength));
++            ws.send(chunk);
++        }
++    });
++}
++
++
++// 发送分块数据
++function sendChunks1(metadata, data) {
++    const CHUNK_SIZE = 512 * 1024; // 512KB
++    const delimiter = '|'; // 分隔符
++    const metadataJson = JSON.stringify(metadata);
++    const delimiterBlob = new Blob([delimiter]);
++    const dataBlob = (data instanceof Blob) ? data : new Blob([data]);
++    const fullBlob = new Blob([metadataJson, delimiterBlob, dataBlob]);
++
++    fullBlob.arrayBuffer().then((arrayBuffer) => {
++        for (let start = 0; start < arrayBuffer.byteLength; start += CHUNK_SIZE) {
++            const chunk = arrayBuffer.slice(start, Math.min(start + CHUNK_SIZE, arrayBuffer.byteLength));
++            ws.send(chunk);
++        }
++    });
++}
++
++
++
++// 用于发送数据的函数
++function sendChunks(ws, data, metadata) {
++    const CHUNK_SIZE = 512 * 1024; // 512KB
++    const encoder = new TextEncoder();
++    const jsonMetadata = JSON.stringify(metadata);
++    const delimiter = encoder.encode('|'); // 分隔符编码，自定义分隔符
++
++    // 创建Blob元素：JSON metadata, 分隔符 以及 data
++    const combinedDataBlob = new Blob([jsonMetadata, delimiter, data]);
++
++    // 读取Blob并发送分块数据
++    const reader = new FileReader();
++    reader.onload = function (e) {
++        const arrayBuffer = e.target.result;
++        const uint8Array = new Uint8Array(arrayBuffer);
++
++        // 把数据分块发送
++        for (let offset = 0; offset < uint8Array.byteLength; offset += CHUNK_SIZE) {
++            const chunk = uint8Array.slice(offset, Math.min(uint8Array.byteLength, offset + CHUNK_SIZE));
++            ws.send(chunk);
++        }
++    };
++    reader.readAsArrayBuffer(combinedDataBlob);
++}
+\ No newline at end of file

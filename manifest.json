@@ -1,0 +1,25 @@
+{
+  "identifier":"my.app.name",
+  "name": "MyPlugin",
+  "version": "1.0.0",
+  "version_number": 1,
+  "description": "This is a sample plugin for the host application.",
+  "author": "Your Name",
+  "url": "https://example.com/updates/myplugin",
+  "app_type": "Web",
+  "windows": {
+    "label": "my_app_name",
+    "title": "我的小程序测试",
+    "resizable": true,
+    "drag_drop_enabled": true,
+    "focus": true,
+    "maximized": false,
+    "center": false,
+    "width": 1480,
+    "height": 900,
+    "min_width": 300,
+    "min_height": 500,
+    "max_height": 2480,
+    "max_width": 1800
+  }
+}
